@@ -41,20 +41,89 @@ public class XsltRunner implements CommandLineRunner {
     }
 
     /** Consume eventos desde el START_ELEMENT actual hasta su END_ELEMENT
+
      *  balanceado, serializándolos a un String XML bien formado. */
-    private static String readSubtree(XMLEventReader reader) throws Exception {
-        StringWriter sw = new StringWriter(4096);
-        int depth = 0;
+
+     private static final XMLOutputFactory XOF = XMLOutputFactory.newInstance();
+
+private static String readSubtree(XMLEventReader reader) throws Exception {
+    StringWriter sw = new StringWriter(4096);
+    XMLEventWriter writer = XOF.createXMLEventWriter(sw);
+    int depth = 0;
+    try {
         while (reader.hasNext()) {
             XMLEvent event = reader.nextEvent();
-            event.writeAsEncodedUnicode(sw);
+            writer.add(event);
             if (event.isStartElement()) {
                 depth++;
             } else if (event.isEndElement()) {
                 depth--;
-                if (depth == 0) return sw.toString();
+                if (depth == 0) {
+                    writer.flush();
+                    return sw.toString();
+                }
             }
         }
-        throw new IllegalStateException("PARTY sin cierre");
+    } finally {
+        writer.close();
     }
+    throw new IllegalStateException("PARTY sin cierre");
+
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+B
+}
 }
