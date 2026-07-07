@@ -1,37 +1,81 @@
 @Component
 public class XsltRunner implements CommandLineRunner {
 
+    private static final Logger log = LoggerFactory.getLogger(XsltRunner.class);
+    private static final int MAX_IN_FLIGHT = 500;   // ventana; ajústala midiendo
+
+    private final ProcessingConfigResolver configResolver;
+    private final KafkaProducerBuilder producerBuilder;
+    private final DlqPublisher dlqPublisher;
+    private final Processor processor;
+    private final ObjectMapper objectMapper;
+
+    // ... constructor ...
+
     @Override
     public void run(String... args) throws Exception {
-        Processor processor = new Processor(false);
-        XsltCompiler compiler = processor.newXsltCompiler();
-        XsltExecutable executable = compiler.compile(
-                new StreamSource(getClass().getResourceAsStream("/Party.xslt")));
+        ProcessingConfig config = configResolver.resolve(args);
+
+        KafkaTemplate<String, SpecificRecord> template =
+                producerBuilder.build(config.bootstrapServers(), config.schemaRegistryUrl());
+        BoundedAvroPublisher publisher =
+                new BoundedAvroPublisher(template, dlqPublisher, MAX_IN_FLIGHT);
+
+        boolean success = false;
+        try {
+            processFile(config, publisher);
+            publisher.awaitCompletion();   // bloquea hasta confirmar TODO (topic o DLQ)
+            success = true;
+        } catch (Exception e) {
+            log.error("Procesamiento fallido para {}: {}", config.inputPath(), e.getMessage(), e);
+        } finally {
+            // el producer debe cerrarse siempre; close() hace un flush final defensivo
+            template.destroy();
+        }
+
+        // exit code honesto: el orquestador reintenta el job si != 0
+        if (!success || publisher.getFailedCount() > 0) {
+            log.error("Job terminó con fallos. Confirmados: {}, fallidos: {}",
+                    publisher.getSentCount(), publisher.getFailedCount());
+            System.exit(1);
+        }
+        log.info("Job completado OK. Total confirmados: {}", publisher.getSentCount());
+    }
+
+    private void processFile(ProcessingConfig config, BoundedAvroPublisher publisher)
+            throws Exception {
 
         XMLInputFactory xif = XMLInputFactory.newInstance();
         xif.setProperty(XMLInputFactory.IS_COALESCING, true);
         xif.setProperty(XMLInputFactory.SUPPORT_DTD, false);
         xif.setProperty("javax.xml.stream.isSupportingExternalEntities", false);
 
-        try (InputStream in  = getClass().getResourceAsStream("/EF_PARTY_A.01Jun2026.xml");
-             OutputStream out = Files.newOutputStream(Path.of("parties.jsonl"))) {
+        DocumentBuilder builder = processor.newDocumentBuilder();
+        Xslt30Transformer transformer = config.executable().load30();  // reusar: single-thread
 
+        try (InputStream in = Files.newInputStream(config.inputPath())) {
             XMLEventReader reader = xif.createXMLEventReader(in);
-            DocumentBuilder builder = processor.newDocumentBuilder();
 
             while (reader.hasNext()) {
                 XMLEvent peek = reader.peek();
                 if (peek.isStartElement()
-                        && "PARTY".equals(peek.asStartElement().getName().getLocalPart())) {
+                        && config.recordElement().equals(peek.asStartElement().getName().getLocalPart())) {
 
-                    String partyXml = readSubtree(reader);
-                    XdmNode partyNode = builder.build(
-                            new StreamSource(new StringReader(partyXml)));
+                    String recordXml = readSubtree(reader);
 
-                    Xslt30Transformer transformer = executable.load30();
-                    Serializer serializer = processor.newSerializer(out);
-                    transformer.applyTemplates(partyNode, serializer);
-                    out.write('\n');
+                    // XSLT: XML → JSON canónico
+                    StringWriter sw = new StringWriter(2048);
+                    Serializer serializer = processor.newSerializer(sw);
+                    transformer.applyTemplates(
+                            builder.build(new StreamSource(new StringReader(recordXml))),
+                            serializer);
+
+                    // JSON → SpecificRecord Avro (valida forma antes de publicar)
+                    SpecificRecord record = toAvro(sw.toString());
+                    String key = record.get("partyRef").toString();  // ajusta al campo real
+
+                    publisher.publish(config.topic(), key, record);  // async acotado
+
                 } else {
                     reader.nextEvent();
                 }
@@ -40,90 +84,9 @@ public class XsltRunner implements CommandLineRunner {
         }
     }
 
-    /** Consume eventos desde el START_ELEMENT actual hasta su END_ELEMENT
-
-     *  balanceado, serializándolos a un String XML bien formado. */
-
-     private static final XMLOutputFactory XOF = XMLOutputFactory.newInstance();
-
-private static String readSubtree(XMLEventReader reader) throws Exception {
-    StringWriter sw = new StringWriter(4096);
-    XMLEventWriter writer = XOF.createXMLEventWriter(sw);
-    int depth = 0;
-    try {
-        while (reader.hasNext()) {
-            XMLEvent event = reader.nextEvent();
-            writer.add(event);
-            if (event.isStartElement()) {
-                depth++;
-            } else if (event.isEndElement()) {
-                depth--;
-                if (depth == 0) {
-                    writer.flush();
-                    return sw.toString();
-                }
-            }
-        }
-    } finally {
-        writer.close();
+    private SpecificRecord toAvro(String json) {
+        // Jackson→POJO Avro, o un mapper JSON→Avro (ej. avro-json o construcción manual
+        // del builder generado). Depende de cómo generes tus clases Avro.
+        // ...
     }
-    throw new IllegalStateException("PARTY sin cierre");
-
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-B
-}
 }
